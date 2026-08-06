@@ -61,3 +61,6 @@ To run this on your machine, you will need the following Python packages:
 
 ## Running the Solver
 Just load the script into Jupyter Notebook and run it. The code has a `report_stability` function that checks the grid parameters and time steps to make sure they stay safely under both the convective (CFL) and diffusive stability limits before it starts crunching numbers.
+
+## Author 
+Ali ghazvine

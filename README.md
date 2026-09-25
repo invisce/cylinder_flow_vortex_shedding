@@ -1,66 +1,77 @@
-# Flow Past a Cylinder (2D Incompressible Navier-Stokes)
+# 2D Cylinder Flow: Incompressible Navier–Stokes Solver
 
-A finite-difference solver for channel flow past a circular cylinder, built entirely from scratch in Python. This project simulates vortex shedding, famously known as the Karman vortex street. I built this to strengthen my engineering portfolio and show my understanding of numerical methods. 
+A finite-difference project for flow past a circular cylinder, developed in Python. The repository retains the original exploratory notebook and adds a separate standalone solver in `main.py`. The standalone solver produces periodic vortex shedding at a cylinder Reynolds number of 100 and reports wake velocity, lift, drag, vorticity, and shedding frequency.
 
-## Overview
-Flow past a cylinder is one of the most famous benchmark problems in Computational Fluid Dynamics (CFD). When a fluid flows around a blunt object like a cylinder, it creates a wake. At low speeds, the wake is calm. But as the speed increases, the wake becomes unstable and starts throwing off alternating swirling whirlpools this is the Karman vortex street. This project builds the math from the very beginning to simulate exactly how and why that happens.
+The standalone solver uses a staggered MAC grid: pressure is stored at cell centres, while velocity components are stored on cell faces. A pressure projection enforces discrete mass conservation at each time step. The cylinder is represented by blocked Cartesian cells, so its curved surface is approximated by a staircase.
 
-## Governing Equations
-The simulation is powered by the incompressible Navier-Stokes equations. Here is the math written out:
+## From notebook to standalone solver
 
-**Continuity (incompressibility):**
+The notebook remains in the repository as the earlier, self-contained implementation and explanation. `main.py` is a separate numerical implementation of the same flow problem, with these changes:
 
-$$ \frac{\partial u}{\partial x} + \frac{\partial v}{\partial y} = 0 $$
+| Aspect | Original notebook | Standalone `main.py` |
+| --- | --- | --- |
+| Variable placement | Velocity and pressure arrays share grid locations. | Pressure is cell-centred; velocity components live on cell faces (MAC grid). |
+| Pressure solve | Numba-accelerated red-black SOR iterations. | A sparse pressure system is factored once with SciPy and solved at each time step. |
+| Mass conservation | Uses central differences for the pressure correction and velocity divergence. | Builds the pressure operator from the same face fluxes used to measure divergence and reports the resulting divergence. |
+| Cylinder forces | Integrates pressure contributions on the masked boundary. | Adds a first-order estimate of wall shear to the pressure contribution; the staircase boundary still limits force accuracy. |
+| Frequency analysis | Uses lift zero crossings and a raw FFT. | Uses interpolated zero crossings and a windowed FFT with peak interpolation; reports the analysis window and frequency resolution. |
 
-**Momentum (x and y directions):**
+The results below belong to `main.py`. They do not retroactively validate the notebook: the two implementations should be assessed with their own settings and convergence checks.
 
-$$ \frac{\partial u}{\partial t} + u\frac{\partial u}{\partial x} + v\frac{\partial u}{\partial y} = -\frac{1}{\rho}\frac{\partial p}{\partial x} + \nu\left(\frac{\partial^2 u}{\partial x^2} + \frac{\partial^2 u}{\partial y^2}\right) $$
+## Model and numerical method
 
-$$ \frac{\partial v}{\partial t} + u\frac{\partial v}{\partial x} + v\frac{\partial v}{\partial y} = -\frac{1}{\rho}\frac{\partial p}{\partial y} + \nu\left(\frac{\partial^2 v}{\partial x^2} + \frac{\partial^2 v}{\partial y^2}\right) $$
+The fluid is governed by the two-dimensional incompressible Navier–Stokes equations:
 
-## Numerical Method
-I programmed a Chorin-style projection method to step the simulation forward in time. Here is a breakdown of the process:
+$$\nabla\cdot\mathbf{u}=0,\qquad
+\frac{\partial\mathbf{u}}{\partial t}+\mathbf{u}\cdot\nabla\mathbf{u}
+=-\frac{1}{\rho}\nabla p+\nu\nabla^2\mathbf{u}.$$
 
-1. **Pressure-Poisson Equation:** In every single time step, the code calculates an intermediate velocity, and then solves a pressure-Poisson equation. This pulls the velocity back to being completely incompressible.
-2. **Central Differencing:** For the convective terms, I used central differences. This is a very important choice. A simpler first-order upwind method adds a lot of fake "numerical diffusion". That fake drag acts like extra viscosity, which drops the effective Reynolds number too low and completely kills the vortex shedding. By using central differences, there is almost zero numerical diffusion, meaning the instability survives.
-3. **Immersed Cylinder:** Modeling curved shapes on a square grid is hard. I treated the cylinder as an "immersed solid". I apply a circular mask that just forces the velocity to zero inside the cylinder area after every single update. It is a simple but very strong way to handle the boundary.
+The implementation advances the convective and viscous terms explicitly, solves a pressure Poisson equation, and corrects the face velocities. The pressure operator and velocity correction share the same face stencil; this makes the corrected field discretely divergence-free, including next to blocked cylinder cells. The sparse pressure system is factored with SciPy and reused throughout the run.
 
-**Boundary Conditions:**
+The default case uses a uniform inlet velocity, no-slip channel walls, a stationary cylinder, and an outlet pressure reference. An optional slip-wall setting is also available. A small, one-time transverse disturbance downstream of the cylinder starts the asymmetric shedding mode.
 
-| Boundary | Condition |
-|---|---|
-| Inlet (left side) | $u = U_\infty, \ v = 0$ (constant incoming flow) |
-| Outlet (right side) | Zero-gradient (the flow exits freely without bouncing back) |
-| Top & Bottom walls | No-slip condition ($u = 0, \ v = 0$) |
-| Cylinder Surface | No-slip condition (handled using the immersed mask) |
+| Parameter | Default value |
+| --- | ---: |
+| Cylinder Reynolds number, $Re_D=U_\infty D/\nu$ | 100 |
+| Domain, $L_x\times L_y$ | $8\times2$ |
+| Cylinder diameter and centre | $D=0.4$, $(x_c,y_c)=(2,1)$ |
+| Blockage ratio, $D/L_y$ | 0.20 |
+| Grid | $400\times100$ pressure cells |
+| Time step and number of steps | $0.002$, 25,000 |
 
-## Simulation Runs
-The solver is set up to run two main tests to see how the fluid changes:
+The stated grid corresponds to `nx=401, ny=101` grid vertices in the Python constructor.
 
-* **Re_D = 25:** This is a low-speed run. The wake stays completely steady and symmetric. It creates a pair of standing recirculation bubbles glued right behind the cylinder. Nothing sheds.
-* **Re_D = 100:** This is a higher-speed run. The wake becomes unstable and starts shedding the Karman vortex street. A perfectly symmetric math equation needs a physical trigger to start shedding, so I added a tiny, brief jolt to the transverse velocity just behind the cylinder during the first half time-unit to cause the instability.
+## Results from the default case
 
-## Validation
-To prove the Re_D = 100 run actually works correctly and simulates real physics, I verified it against the Strouhal number (St). 
+Statistics below use the final 40% of a 50-time-unit run of `main.py` (time 30–50). They should be recalculated if the method or settings change.
 
-$$ St = \frac{f \, D}{U_\infty} $$
+| Diagnostic | Result |
+| --- | ---: |
+| Strouhal number from lift zero crossings | 0.2369 |
+| Strouhal number from windowed lift FFT | 0.2367 |
+| Maximum discrete velocity divergence in the analysis window | $2.53\times10^{-14}$ |
+| Mean drag coefficient, staircase estimate | 1.9385 |
+| Lift coefficient amplitude, staircase estimate | 0.5357 |
 
-For a cylinder wake in this Reynolds number range, the real-world experimental value should be approximately $St \approx 0.2$. I placed a virtual probe in the wake to track the transverse velocity over time. I found the shedding frequency ($f$) using two different methods:
-1. Counting the zero-crossings of the velocity signal.
-2. Running a Fast Fourier Transform (FFT).
+The two Strouhal estimates agree, but both come from the **same lift history**: their agreement is an internal consistency check, not independent validation against a reference solution. The FFT window spans 20 time units, giving a frequency-bin spacing of 0.05 inverse time units; the reported FFT peak is interpolated between bins. The large force transient immediately after initialization is excluded from the reported averages.
 
-Both methods gave a result near 0.2, which proves that the simulation oscillates at the exact right frequency, not just a random one.
+The low divergence measures how well the **discrete** continuity equation is satisfied. It does not, by itself, establish grid convergence or accuracy of the cylinder forces. For a confined cylinder, published frequencies must be compared using a matching blockage ratio and boundary conditions; an unconfined-cylinder Strouhal number is not a direct benchmark for this case. See [Sahin and Owens (2004)](https://doi.org/10.1063/1.1668285) for the effect of wall confinement.
 
-## Requirements
-To run this on your machine, you will need the following Python packages:
-* `numpy`
-* `matplotlib`
-* `numba`
+## Run
 
-*Note:* `numba` is highly recommended. Using the `@njit` decorator with `fastmath=True` makes the heavy loops run in about a minute. If you run this with pure `numpy`, it will take about 4 minutes to finish.
+Install `numpy`, `scipy`, and `matplotlib`. Install `pillow` as well to export the animation.
 
-## Running the Solver
-Just load the script into Jupyter Notebook and run it. The code has a `report_stability` function that checks the grid parameters and time steps to make sure they stay safely under both the convective (CFL) and diffusive stability limits before it starts crunching numbers.
+```bash
+python -m pip install numpy scipy matplotlib pillow
+python main.py
+```
 
-## Author 
-Ali ghazvine
+The default run writes `cfd_validation_dashboard.png` and `vortex_street.gif` to the current working directory. It also prints the pressure-solve residual, maximum discrete divergence, and post-transient frequency and force estimates. To change the grid, Reynolds number, time step, or wall condition, edit the solver construction and `solve()` call in `main.py`. A full default run uses 25,000 time steps and can take several minutes depending on the computer.
+
+## Scope and next checks
+
+- Run grid and time-step refinement studies for $St$, mean $C_D$, and lift amplitude.
+- Compare against a published case with the same blockage, inlet profile, wall conditions, and force normalization.
+- Refine the staircase force integration or use a more accurate representation of the curved boundary before treating drag and lift as benchmark-quality values.
+
+**Author:** Ali Ghazvine
